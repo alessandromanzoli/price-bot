@@ -47,6 +47,8 @@ from telegram.ext import (
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 DATA_FILE = "prodotti.json"       # File dove vengono salvati i prodotti
 CHECK_INTERVAL = 3600             # Controlla ogni ora (in secondi)
+SCRAPER_API_KEY = "46436de7d527a03b4e6118175382aa77"
+
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -140,6 +142,33 @@ def estrai_prezzo_generico(soup: BeautifulSoup) -> float | None:
 
 
 def get_prezzo(url: str) -> tuple[float | None, str]:
+    try:
+        payload = {
+            "api_key": SCRAPER_API_KEY,
+            "url": url,
+            "render": "false",
+            "country_code": "it",
+        }
+        resp = requests.get(
+            "http://api.scraperapi.com",
+            params=payload,
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        return None, f"Errore di rete: {e}"
+
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    if "amazon." in url:
+        prezzo = estrai_prezzo_amazon(soup)
+    else:
+        prezzo = estrai_prezzo_generico(soup)
+
+    if prezzo is None:
+        return None, "Prezzo non trovato."
+
+    return prezzo, ""
     """
     Scarica la pagina e tenta di estrarre il prezzo.
     Restituisce (prezzo, messaggio_errore).
