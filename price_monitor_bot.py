@@ -28,7 +28,8 @@ import asyncio
 import re
 from datetime import datetime
 
-import requests
+import cloudscraper
+scraper = cloudscraper.create_scraper()
 from bs4 import BeautifulSoup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -144,7 +145,7 @@ def get_prezzo(url: str) -> tuple[float | None, str]:
     Restituisce (prezzo, messaggio_errore).
     """
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = scraper.get(url, timeout=15)
         resp.raise_for_status()
     except requests.RequestException as e:
         return None, f"Errore di rete: {e}"
