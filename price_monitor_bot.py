@@ -48,8 +48,7 @@ from telegram.ext import (
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 DATA_FILE = "prodotti.json"       # File dove vengono salvati i prodotti
 CHECK_INTERVAL = 3600             # Controlla ogni ora (in secondi)
-SCRAPER_API_KEY = "46436de7d527a03b4e6118175382aa77"
-
+SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -104,21 +103,31 @@ def salva_prodotti_utente(user_id: str, prodotti: list) -> None:
 # ── Scraping prezzi ─────────────────────────────────────────────────────────────
 
 def estrai_prezzo_amazon(soup: BeautifulSoup) -> float | None:
-    """Estrae il prezzo da una pagina Amazon."""
     selettori = [
         "span.a-price-whole",
+        "span.a-offscreen",
         "#priceblock_ourprice",
         "#priceblock_dealprice",
-        "span.a-offscreen",
+        "#priceblock_saleprice",
         ".a-price .a-offscreen",
+        "#corePrice_feature_div .a-offscreen",
+        "#apex_offerDisplay_desktop .a-offscreen",
     ]
     for sel in selettori:
-        el = soup.select_one(sel)
-        if el:
+        elementi = soup.select(sel)
+        for el in elementi:
             testo = el.get_text(strip=True)
             testo = re.sub(r"[^\d,\.]", "", testo).replace(",", ".")
+            if not testo:
+                continue
             try:
-                return float(testo.split(".")[0] + "." + testo.split(".")[-1] if testo.count(".") > 1 else testo)
+                parti = testo.split(".")
+                if len(parti) >= 2:
+                    prezzo = float(parti[0] + "." + parti[-1])
+                else:
+                    prezzo = float(testo)
+                if prezzo > 0:
+                    return prezzo
             except ValueError:
                 continue
     return None
@@ -147,7 +156,7 @@ def get_prezzo(url: str) -> tuple[float | None, str]:
         payload = {
             "api_key": SCRAPER_API_KEY,
             "url": url,
-            "render": "false",
+            "render": "true",
             "country_code": "it",
         }
         resp = requests.get(
