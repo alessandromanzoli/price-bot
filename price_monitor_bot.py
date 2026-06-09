@@ -28,6 +28,7 @@ import asyncio
 import re
 from datetime import datetime
 
+import requests
 import cloudscraper
 scraper = cloudscraper.create_scraper()
 from bs4 import BeautifulSoup
