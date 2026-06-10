@@ -122,7 +122,7 @@ def get_prezzo(url: str) -> tuple[float | None, str]:
         payload = {
             "api_key": SCRAPER_API_KEY,
             "url": url,
-            "render": "true",
+            "render": "false",
             "country_code": "it",
         }
         resp = requests.get(
