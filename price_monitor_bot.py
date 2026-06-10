@@ -5,19 +5,11 @@ Monitora i prezzi di prodotti su Amazon e altri siti e-commerce.
 Avvisa l'utente quando il prezzo scende sotto la soglia impostata.
 
 Installazione:
-    pip install python-telegram-bot requests beautifulsoup4 lxml
+    pip install python-telegram-bot[job-queue]==21.5 requests beautifulsoup4 lxml
 
-Utilizzo:
-    1. Crea un bot su Telegram con @BotFather e ottieni il TOKEN
-    2. Inserisci il token in BOT_TOKEN qui sotto
-    3. Avvia con: python price_monitor_bot.py
-
-Comandi bot:
-    /start        - Messaggio di benvenuto
-    /aggiungi     - Aggiungi un prodotto da monitorare
-    /lista        - Mostra tutti i prodotti monitorati
-    /rimuovi <id> - Rimuovi un prodotto dalla lista
-    /controlla    - Controlla subito tutti i prezzi
+Variabili d'ambiente necessarie:
+    BOT_TOKEN      - Token del bot Telegram (da @BotFather)
+    SCRAPER_API_KEY - Chiave API di ScraperAPI (da scraperapi.com)
 """
 
 import os
@@ -29,15 +21,12 @@ import re
 from datetime import datetime
 
 import requests
-import cloudscraper
-scraper = cloudscraper.create_scraper()
 from bs4 import BeautifulSoup
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     ConversationHandler,
     filters,
     ContextTypes,
@@ -45,10 +34,10 @@ from telegram.ext import (
 
 # ── Configurazione ──────────────────────────────────────────────────────────────
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-DATA_FILE = "prodotti.json"       # File dove vengono salvati i prodotti
-CHECK_INTERVAL = 3600             # Controlla ogni ora (in secondi)
+BOT_TOKEN       = os.environ.get("BOT_TOKEN", "")
 SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
+DATA_FILE       = "prodotti.json"
+CHECK_INTERVAL  = 3600  # Controlla ogni ora (in secondi)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -59,46 +48,25 @@ logger = logging.getLogger(__name__)
 # Stati conversazione per /aggiungi
 ASK_URL, ASK_SOGLIA, ASK_NOME = range(3)
 
-# Headers per sembrare un browser reale (evita blocchi anti-bot)
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
-
-
-# ── Gestione dati (salvataggio su JSON) ─────────────────────────────────────────
+# ── Gestione dati ───────────────────────────────────────────────────────────────
 
 def carica_dati() -> dict:
-    """Carica i prodotti salvati dal file JSON."""
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
-
 def salva_dati(dati: dict) -> None:
-    """Salva i prodotti nel file JSON."""
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(dati, f, ensure_ascii=False, indent=2)
 
-
 def ottieni_prodotti_utente(user_id: str) -> list:
-    """Restituisce i prodotti monitorati da un utente specifico."""
-    dati = carica_dati()
-    return dati.get(user_id, [])
-
+    return carica_dati().get(user_id, [])
 
 def salva_prodotti_utente(user_id: str, prodotti: list) -> None:
-    """Salva i prodotti di un utente."""
     dati = carica_dati()
     dati[user_id] = prodotti
     salva_dati(dati)
-
 
 # ── Scraping prezzi ─────────────────────────────────────────────────────────────
 
@@ -132,10 +100,7 @@ def estrai_prezzo_amazon(soup: BeautifulSoup) -> float | None:
                 continue
     return None
 
-
 def estrai_prezzo_generico(soup: BeautifulSoup) -> float | None:
-    """Tenta di estrarre un prezzo da qualsiasi sito e-commerce."""
-    # Cerca elementi con attributi comuni per i prezzi
     candidati = soup.find_all(
         True,
         attrs={"class": re.compile(r"price|precio|prezzo|preis", re.I)},
@@ -150,8 +115,8 @@ def estrai_prezzo_generico(soup: BeautifulSoup) -> float | None:
                 continue
     return None
 
-
 def get_prezzo(url: str) -> tuple[float | None, str]:
+    """Recupera il prezzo usando ScraperAPI per bypassare i blocchi."""
     try:
         payload = {
             "api_key": SCRAPER_API_KEY,
@@ -162,7 +127,7 @@ def get_prezzo(url: str) -> tuple[float | None, str]:
         resp = requests.get(
             "http://api.scraperapi.com",
             params=payload,
-            timeout=30,
+            timeout=60,
         )
         resp.raise_for_status()
     except requests.RequestException as e:
@@ -176,37 +141,13 @@ def get_prezzo(url: str) -> tuple[float | None, str]:
         prezzo = estrai_prezzo_generico(soup)
 
     if prezzo is None:
-        return None, "Prezzo non trovato."
-
-    return prezzo, ""
-    """
-    Scarica la pagina e tenta di estrarre il prezzo.
-    Restituisce (prezzo, messaggio_errore).
-    """
-    try:
-        resp = scraper.get(url, timeout=15)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        return None, f"Errore di rete: {e}"
-
-    soup = BeautifulSoup(resp.text, "lxml")
-
-    # Sceglie la strategia in base al dominio
-    if "amazon." in url:
-        prezzo = estrai_prezzo_amazon(soup)
-    else:
-        prezzo = estrai_prezzo_generico(soup)
-
-    if prezzo is None:
         return None, "Prezzo non trovato (il sito potrebbe bloccare i bot)"
 
     return prezzo, ""
 
-
 # ── Handler comandi Telegram ─────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Messaggio di benvenuto."""
     testo = (
         "👋 *Ciao! Sono il tuo monitor prezzi.*\n\n"
         "Ti avviso quando il prezzo di un prodotto scende sotto la soglia che imposti.\n\n"
@@ -219,11 +160,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     await update.message.reply_text(testo, parse_mode="Markdown")
 
-
 # ── Conversazione /aggiungi ──────────────────────────────────────────────────────
 
 async def aggiungi_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Avvia la conversazione per aggiungere un prodotto."""
     await update.message.reply_text(
         "🔗 Inviami il *link* del prodotto da monitorare.\n"
         "_(Es: https://www.amazon.it/dp/B08N5WRWNW)_",
@@ -231,17 +170,14 @@ async def aggiungi_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     return ASK_URL
 
-
 async def ricevi_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Riceve l'URL e controlla subito il prezzo attuale."""
     url = update.message.text.strip()
-
     if not url.startswith("http"):
         await update.message.reply_text("❌ URL non valido. Riprova con /aggiungi")
         return ConversationHandler.END
 
     context.user_data["url"] = url
-    await update.message.reply_text("⏳ Controllo il prezzo attuale...")
+    await update.message.reply_text("⏳ Controllo il prezzo attuale, attendi...")
 
     prezzo, errore = get_prezzo(url)
     if prezzo is None:
@@ -260,9 +196,7 @@ async def ricevi_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
     return ASK_SOGLIA
 
-
 async def ricevi_soglia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Riceve la soglia di prezzo."""
     try:
         soglia = float(update.message.text.strip().replace(",", "."))
     except ValueError:
@@ -276,14 +210,12 @@ async def ricevi_soglia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     )
     return ASK_NOME
 
-
 async def ricevi_nome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Riceve il nome e salva il prodotto."""
     nome = update.message.text.strip()
     user_id = str(update.effective_user.id)
 
     prodotti = ottieni_prodotti_utente(user_id)
-    nuovo_id = int(time.time())  # ID univoco basato sul timestamp
+    nuovo_id = int(time.time())
 
     prodotti.append({
         "id": nuovo_id,
@@ -303,17 +235,13 @@ async def ricevi_nome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     )
     return ConversationHandler.END
 
-
 async def annulla(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Annulla la conversazione corrente."""
     await update.message.reply_text("❌ Operazione annullata.")
     return ConversationHandler.END
-
 
 # ── Comando /lista ───────────────────────────────────────────────────────────────
 
 async def lista(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Mostra tutti i prodotti monitorati dall'utente."""
     user_id = str(update.effective_user.id)
     prodotti = ottieni_prodotti_utente(user_id)
 
@@ -332,23 +260,16 @@ async def lista(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"  🎯 Soglia: €{p['soglia']:.2f}\n"
             f"  🆔 ID: `{p['id']}`\n\n"
         )
-
     testo += "_Per rimuovere: /rimuovi <ID>_"
     await update.message.reply_text(testo, parse_mode="Markdown")
-
 
 # ── Comando /rimuovi ─────────────────────────────────────────────────────────────
 
 async def rimuovi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Rimuove un prodotto dalla lista."""
     user_id = str(update.effective_user.id)
-
     if not context.args:
-        await update.message.reply_text(
-            "❓ Usa: /rimuovi <ID>\nTrova l'ID con /lista"
-        )
+        await update.message.reply_text("❓ Usa: /rimuovi <ID>\nTrova l'ID con /lista")
         return
-
     try:
         target_id = int(context.args[0])
     except ValueError:
@@ -357,42 +278,32 @@ async def rimuovi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     prodotti = ottieni_prodotti_utente(user_id)
     nuovi = [p for p in prodotti if p["id"] != target_id]
-
     if len(nuovi) == len(prodotti):
         await update.message.reply_text("❌ Prodotto non trovato.")
         return
-
     salva_prodotti_utente(user_id, nuovi)
     await update.message.reply_text("✅ Prodotto rimosso.")
-
 
 # ── Comando /controlla ───────────────────────────────────────────────────────────
 
 async def controlla_manuale(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Controlla subito i prezzi di tutti i prodotti dell'utente."""
     user_id = str(update.effective_user.id)
     prodotti = ottieni_prodotti_utente(user_id)
-
     if not prodotti:
         await update.message.reply_text("📭 Nessun prodotto da controllare.")
         return
 
     await update.message.reply_text(f"⏳ Controllo {len(prodotti)} prodotti...")
-
     risultati = []
     for p in prodotti:
         prezzo, errore = get_prezzo(p["url"])
         if prezzo:
             p["ultimo_prezzo"] = prezzo
             if prezzo <= p["soglia"]:
-                risultati.append(
-                    f"🔔 *{p['nome']}* — €{prezzo:.2f} (soglia: €{p['soglia']:.2f}) ✅"
-                )
+                risultati.append(f"🔔 *{p['nome']}* — €{prezzo:.2f} (soglia: €{p['soglia']:.2f}) ✅")
             else:
                 diff = prezzo - p["soglia"]
-                risultati.append(
-                    f"📦 *{p['nome']}* — €{prezzo:.2f} (mancano €{diff:.2f})"
-                )
+                risultati.append(f"📦 *{p['nome']}* — €{prezzo:.2f} (mancano €{diff:.2f})")
         else:
             risultati.append(f"⚠️ *{p['nome']}* — {errore}")
 
@@ -402,14 +313,9 @@ async def controlla_manuale(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         parse_mode="Markdown",
     )
 
-
 # ── Job periodico ────────────────────────────────────────────────────────────────
 
 async def controlla_automatico(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Controlla automaticamente tutti i prezzi ogni CHECK_INTERVAL secondi.
-    Invia una notifica se un prezzo scende sotto la soglia.
-    """
     dati = carica_dati()
     modificati = False
 
@@ -423,7 +329,6 @@ async def controlla_automatico(context: ContextTypes.DEFAULT_TYPE) -> None:
             p["ultimo_prezzo"] = prezzo
             modificati = True
 
-            # Notifica solo se sotto soglia E il prezzo è cambiato (o è il primo controllo)
             if prezzo <= p["soglia"] and (vecchio is None or vecchio > p["soglia"]):
                 try:
                     await context.bot.send_message(
@@ -444,14 +349,11 @@ async def controlla_automatico(context: ContextTypes.DEFAULT_TYPE) -> None:
     if modificati:
         salva_dati(dati)
 
-
 # ── Avvio bot ────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    """Avvia il bot."""
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Conversazione per /aggiungi
     conv = ConversationHandler(
         entry_points=[CommandHandler("aggiungi", aggiungi_start)],
         states={
@@ -468,12 +370,10 @@ def main() -> None:
     app.add_handler(CommandHandler("rimuovi", rimuovi))
     app.add_handler(CommandHandler("controlla", controlla_manuale))
 
-    # Job automatico ogni CHECK_INTERVAL secondi
     app.job_queue.run_repeating(controlla_automatico, interval=CHECK_INTERVAL, first=10)
 
-    logger.info("Bot avviato. Premi Ctrl+C per fermare.")
+    logger.info("Bot avviato.")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()
