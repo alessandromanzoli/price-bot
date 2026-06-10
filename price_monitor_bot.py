@@ -18,6 +18,7 @@ import time
 import logging
 import asyncio
 import re
+from functools import partial
 from datetime import datetime
 
 import requests
@@ -179,7 +180,8 @@ async def ricevi_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["url"] = url
     await update.message.reply_text("⏳ Controllo il prezzo attuale, attendi...")
 
-    prezzo, errore = get_prezzo(url)
+    loop = asyncio.get_event_loop()
+    prezzo, errore = await loop.run_in_executor(None, partial(get_prezzo, url))
     if prezzo is None:
         await update.message.reply_text(
             f"⚠️ {errore}\n\nPuoi comunque impostare una soglia manualmente.\n"
@@ -295,8 +297,9 @@ async def controlla_manuale(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await update.message.reply_text(f"⏳ Controllo {len(prodotti)} prodotti...")
     risultati = []
+    loop = asyncio.get_event_loop()
     for p in prodotti:
-        prezzo, errore = get_prezzo(p["url"])
+        prezzo, errore = await loop.run_in_executor(None, partial(get_prezzo, p["url"]))
         if prezzo:
             p["ultimo_prezzo"] = prezzo
             if prezzo <= p["soglia"]:
@@ -320,8 +323,9 @@ async def controlla_automatico(context: ContextTypes.DEFAULT_TYPE) -> None:
     modificati = False
 
     for user_id, prodotti in dati.items():
+        loop = asyncio.get_event_loop()
         for p in prodotti:
-            prezzo, errore = get_prezzo(p["url"])
+            prezzo, errore = await loop.run_in_executor(None, partial(get_prezzo, p["url"]))
             if prezzo is None:
                 continue
 
